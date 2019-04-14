@@ -36,29 +36,7 @@ enum display_mode {
     M_SEC_DISP,
 };
 
-/* ------------------------------------------------------------------------- */
-/*
-void _delay_ms(uint8_t ms)
-{
-    // delay function, tuned for 11.092 MHz clock
-    // optimized to assembler
-    ms; // keep compiler from complaining?
-    __asm;
-        ; dpl contains ms param value
-    delay$:
-        mov	b, #8   ; i
-    outer$:
-        mov	a, #243    ; j
-    inner$:
-        djnz acc, inner$
-        djnz b, outer$
-        djnz dpl, delay$
-    __endasm;
-}
-*/
-
 uint8_t  count;     // main loop counter
-uint8_t temp;      // temperature sensor value
 uint8_t  lightval;  // light sensor value
 
 volatile uint8_t displaycounter;
@@ -203,34 +181,6 @@ void timer0_isr() __interrupt 1 __using 1
     count_5000++;
 }
 
-/*
-// macro expansion for MONITOR_S(1)
-{
-    uint8_t s = 1 - 1;
-    debounce[s] = (debounce[s] << 1) | SW1 ;
-    if (debounce[s] == 0) {
-        S_PRESSED = 1;
-        if (!S_LONG) {
-            switchcount[s]++;
-        }
-    } else {
-        if (S1_PRESSED) {
-            if (!S1_LONG) {
-                ev = EV_S1_SHORT;
-            }
-            S1_PRESSED = 0;
-            S1_LONG = 0;
-            switchcount[s] = 0;
-        }
-    }
-    if (switchcount[s] > SW_CNTMAX) {
-        S1_LONG = 1;
-        switchcount[s] = 0;
-        ev = EV_S1_LONG;
-    }
-}
-*/
-
 // Call timer0_isr() 10000/sec: 0.0001 sec
 // Initialize the timer count so that it overflows after 0.0001 sec
 // THTL = 0x10000 - FOSC / 12 / 10000 = 0x10000 - 92.16 = 65444 = 0xFFA4
@@ -246,30 +196,6 @@ void Timer0Init(void)		//100us @ 11.0592MHz
     TR0 = 1;		// Timer0 start run
     ET0 = 1;        // Enable timer0 interrupt
     EA = 1;         // Enable global interrupt
-}
-
-// Formula was : 76-raw*64/637 - which makes use of integer mult/div routines
-// Getting degF from degC using integer was not good as values were sometimes jumping by 2
-// The floating point one is even worse in term of code size generated (>1024bytes...)
-// Approximation for slope is 1/10 (64/637) - valid for a normal 20 degrees range
-// & let's find some other trick (80 bytes - See also docs\Temp.ods file)
-int8_t gettemp(uint16_t raw) {
-    uint16_t val=raw;
-    uint8_t temp;
-
-    raw<<=2;
-    if (CONF_C_F) raw<<=1;  // raw*5 (4+1) if Celcius, raw*9 (4*2+1) if Farenheit
-    raw+=val;
-
-    if (CONF_C_F) {val=6835; temp=32;}  // equiv. to temp=xxxx-(9/5)*raw/10 i.e. 9*raw/50
-                                        // see next - same for degF
-             else {val=5*757; temp=0;}  // equiv. to temp=xxxx-raw/10 or which is same 5*raw/50  
-                                        // at 25degC, raw is 512, thus 24 is 522 and limit between 24 and 25 is 517
-                                        // so between 0deg and 1deg, limit is 517+24*10 = 757 
-                                        // (*5 due to previous adjustment of raw value)
-    while (raw<val) {temp++; val-=50;}
-
-    return temp + (cfg_table[CFG_TEMP_BYTE] & CFG_TEMP_MASK) - 4;
 }
 
 void dot3display(__bit pm)
@@ -305,11 +231,6 @@ int main()
 
         ev = event;
         event = EV_NONE;
-
-        // sample adc, run frequently
-        if (count % (uint8_t) 4 == 0) {
-            temp = gettemp(getADCResult(ADC_TEMP));
-        }
 
         lightval = 4;
 

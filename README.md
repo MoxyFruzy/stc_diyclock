@@ -6,6 +6,11 @@ Firmware replacement for STC15F mcu-based DIY Clock Kit (available from banggood
 
 [link to Banggood product page for SKU 972289](http://www.banggood.com/DIY-4-Digit-LED-Electronic-Clock-Kit-Temperature-Light-Control-Version-p-972289.html?p=WX0407753399201409DA)
 
+## Flashing
+make clean
+make
+STCGALPORT=/dev/cu.usbserial-A50285BI STCGALPROT="stc15" make flash
+
 ## features
 Basic functionality is working:
 * time display/set (12/24 hour modes)
