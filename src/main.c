@@ -27,24 +27,6 @@ enum keyboard_mode {
     K_SET_HOUR,
     K_SET_MINUTE,
     K_SET_HOUR_12_24,
-    K_SEC_DISP,
-    K_TEMP_DISP,
-#ifndef WITHOUT_DATE
-    K_DATE_DISP,
-    K_SET_MONTH,
-    K_SET_DAY,
-#endif
-    K_WEEKDAY_DISP,
-#ifndef WITHOUT_ALARM
-    K_ALARM,
-    K_ALARM_SET_HOUR,
-    K_ALARM_SET_MINUTE,
-#endif
-#ifdef DEBUG
-    K_DEBUG,
-    K_DEBUG2,
-    K_DEBUG3,
-#endif
 };
 
 // display mode states
@@ -52,21 +34,7 @@ enum display_mode {
     M_NORMAL,
     M_SET_HOUR_12_24,
     M_SEC_DISP,
-    M_TEMP_DISP,
-#ifndef WITHOUT_DATE
-    M_DATE_DISP,
-#endif
-    M_WEEKDAY_DISP,
-#ifndef WITHOUT_ALARM
-    M_ALARM,
-#endif
-#ifdef DEBUG
-    M_DEBUG,
-    M_DEBUG2,
-    M_DEBUG3,
-#endif
 };
-#define NUM_DEBUG 3
 
 /* ------------------------------------------------------------------------- */
 /*
@@ -97,10 +65,6 @@ volatile uint8_t displaycounter;
 volatile int8_t count_100;
 volatile int16_t count_1000;
 volatile int16_t count_5000;
-#ifndef WITHOUT_ALARM
-volatile int16_t count_20000;
-volatile __bit blinker_slowest;
-#endif
 
 volatile uint16_t count_timeout; // max 6.5536 sec
 #define TIMEOUT_LONG 0xFFFF
@@ -117,13 +81,6 @@ __bit  flash_23;
 uint8_t rtc_hh_bcd;
 uint8_t rtc_mm_bcd;
 __bit rtc_pm;
-#ifndef WITHOUT_ALARM
-uint8_t alarm_hh_bcd;
-uint8_t alarm_mm_bcd;
-__bit alarm_pm;
-__bit alarm_trigger;
-__bit alarm_reset;
-#endif
 __bit cfg_changed = 1;
 
 volatile __bit S1_LONG;
@@ -190,14 +147,6 @@ void timer0_isr() __interrupt 1 __using 1
             if (count_5000 == 5000) {
                 count_5000 = 0;
                 blinker_slow = !blinker_slow;
-#ifndef WITHOUT_ALARM
-                // 1/ 2sec: 20000 ms
-                if (count_20000 == 20000) {
-                    count_20000 = 0;
-                }
-                // 500 ms on, 1500 ms off
-                blinker_slowest = count_20000 < 5000;
-#endif
             }
         }
 
@@ -252,18 +201,6 @@ void timer0_isr() __interrupt 1 __using 1
     count_100++;
     count_1000++;
     count_5000++;
-#ifndef WITHOUT_ALARM
-    count_20000++;
-
-    if (count_timeout != 0) {
-        count_timeout--;
-        if (count_timeout == 0) {
-            if (event == EV_NONE) {
-                event = EV_TIMEOUT;
-            }
-        }
-    }
-#endif
 }
 
 /*
@@ -337,15 +274,6 @@ int8_t gettemp(uint16_t raw) {
 
 void dot3display(__bit pm)
 {
-#ifndef WITHOUT_ALARM
-    // dot 3: If alarm is on, blink for 500 ms every 2000 ms
-    //        If 12h: on if pm when not blinking
-    if (!H12_12) { // 24h
-        pm = CONF_ALARM_ON && blinker_slowest && blinker_fast;
-    } else if (CONF_ALARM_ON && blinker_slowest) {
-        pm = blinker_fast;
-    }
-#endif
     dotdisplay(3, pm);
 }
 
@@ -381,13 +309,9 @@ int main()
         // sample adc, run frequently
         if (count % (uint8_t) 4 == 0) {
             temp = gettemp(getADCResult(ADC_TEMP));
-            // auto-dimming, by dividing adc range into 8 steps
-            lightval = getADCResult8(ADC_LIGHT) >> 3;
-            // set floor of dimming range
-            if (lightval < 4) {
-                lightval = 4;
-            }
         }
+
+        lightval = 4;
 
         // Read RTC
         ds_readburst();
@@ -402,46 +326,6 @@ int main()
             rtc_pm = H12_12 && H12_PM;
             rtc_mm_bcd = rtc_table[DS_ADDR_MINUTES] & DS_MASK_MINUTES;
         }
-
-#ifndef WITHOUT_ALARM
-        if (cfg_changed) {
-            alarm_pm = 0;
-            alarm_hh_bcd = cfg_table[CFG_ALARM_HOURS_BYTE] >> 3;
-            if (H12_12) {
-                if (alarm_hh_bcd >= 12) {
-                    alarm_pm = 1;
-                    alarm_hh_bcd -= 12;
-                }
-                if (alarm_hh_bcd == 0) {
-                    alarm_hh_bcd = 12;
-                }
-            }
-            alarm_mm_bcd = cfg_table[CFG_ALARM_MINUTES_BYTE] & CFG_ALARM_MINUTES_MASK;
-            // convert to BCD
-            alarm_hh_bcd = ds_int2bcd(alarm_hh_bcd);
-            alarm_mm_bcd = ds_int2bcd(alarm_mm_bcd);
-            cfg_changed = 0;
-        }
-
-        // check for alarm trigger
-        if (alarm_hh_bcd == rtc_hh_bcd && alarm_mm_bcd == rtc_mm_bcd && alarm_pm == rtc_pm) {
-            if (CONF_ALARM_ON && !alarm_trigger && !alarm_reset) {
-                alarm_trigger = 1;
-            }
-        } else {
-            alarm_trigger = 0;
-            alarm_reset = 0;
-        }
-
-        // S1 or S2 to stop alarm
-        if (alarm_trigger && !alarm_reset) {
-            if (ev == EV_S1_SHORT || ev == EV_S2_SHORT) {
-                alarm_reset = 1;
-                alarm_trigger = 0;
-                ev = EV_NONE;
-            }
-        }
-#endif
 
         // keyboard decision tree
         switch (kmode) {
@@ -478,154 +362,6 @@ int main()
                 }
                 break;
 
-            case K_TEMP_DISP:
-                dmode = M_TEMP_DISP;
-                if (ev == EV_S1_SHORT) {
-                    ds_temperature_offset_incr();
-                }
-                else if (ev == EV_S1_LONG) {
-                    ds_temperature_cf_toggle();
-                }
-                else if (ev == EV_S2_SHORT) {
-#ifndef WITHOUT_DATE
-                    kmode = K_DATE_DISP;
-#else
-                    kmode = K_WEEKDAY_DISP;
-#endif
-                }
-                break;
-
-#ifndef WITHOUT_DATE
-            case K_DATE_DISP:
-                dmode = M_DATE_DISP;
-                if (ev == EV_S1_SHORT) {
-                    ds_date_mmdd_toggle();
-                }
-                else if (ev == EV_S1_LONG) {
-                    kmode = CONF_SW_MMDD ? K_SET_DAY : K_SET_MONTH;
-                }
-                else if (ev == EV_S2_SHORT) {
-                    kmode = K_WEEKDAY_DISP;
-                }
-                break;
-
-            case K_SET_MONTH:
-                flash_01 = 1;
-                if (ev == EV_S2_SHORT || (S2_LONG && blinker_fast)) {
-                    ds_month_incr();
-                }
-                else if (ev == EV_S1_SHORT) {
-                    flash_01 = 0;
-                    kmode = CONF_SW_MMDD ? K_DATE_DISP : K_SET_DAY;
-                }
-                break;
-
-            case K_SET_DAY:
-                flash_23 = 1;
-                if (ev == EV_S2_SHORT || (S2_LONG && blinker_fast)) {
-                    ds_day_incr();
-                }
-                else if (ev == EV_S1_SHORT) {
-                    flash_23 = 0;
-                    kmode = CONF_SW_MMDD ? K_SET_MONTH : K_DATE_DISP;
-                }
-                break;
-#endif
-
-            case K_WEEKDAY_DISP:
-                dmode = M_WEEKDAY_DISP;
-                if (ev == EV_S1_SHORT || (S1_LONG && blinker_fast)) {
-                    ds_weekday_incr();
-                }
-                else if (ev == EV_S2_SHORT) {
-                    kmode = K_NORMAL;
-                }
-                break;
-
-#ifdef DEBUG
-            // To enter DEBUG mode, go to the SECONDS display, then hold S1 and S2 simultaneously.
-            // S1 cycles through the DEBUG modes.
-            // To exit DEBUG mode, hold S1 and S2 again.
-            case K_DEBUG:
-            case K_DEBUG2:
-            case K_DEBUG3:
-                dmode = M_DEBUG + kmode - K_DEBUG;
-                if (ev == EV_S1_SHORT) {
-                    kmode = (kmode - K_DEBUG + 1) % NUM_DEBUG + K_DEBUG;
-                }
-                else if (ev == EV_S1S2_LONG) {
-                    kmode = K_SEC_DISP;
-                }
-                break;
-#endif
-
-            case K_SEC_DISP:
-                dmode = M_SEC_DISP;
-                if (ev == EV_S1_SHORT) {
-#ifndef WITHOUT_ALARM
-                    kmode = K_ALARM;
-#else
-                    kmode = K_NORMAL;
-#endif
-                }
-                else if (ev == EV_S2_SHORT) {
-                    ds_sec_zero();
-                }
-#ifdef DEBUG
-                else if (ev == EV_S1S2_LONG) {
-                    kmode = K_DEBUG;
-                }
-#endif
-                break;
-
-#ifndef WITHOUT_ALARM
-            case K_ALARM:
-                flash_01 = 0;
-                flash_23 = 0;
-                dmode = M_ALARM;
-                if (count_timeout == 0) {
-                    count_timeout = TIMEOUT_LONG;
-                }
-                if (ev == EV_S1_SHORT || ev == EV_TIMEOUT) {
-                    count_timeout = 0;
-                    kmode = K_NORMAL;
-                }
-                else if (ev == EV_S2_SHORT) {
-                    ds_alarm_on_toggle();
-                    cfg_changed = 1;
-                }
-                else if (ev == EV_S2_LONG) {
-                    count_timeout = 0;
-                    kmode = K_ALARM_SET_HOUR;
-                }
-                break;
-
-            case K_ALARM_SET_HOUR:
-                flash_01 = 1;
-                alarm_reset = 1; // don't trigger while setting
-                if (ev == EV_S2_SHORT) {
-                    kmode = K_ALARM_SET_MINUTE;
-                }
-                else if (ev == EV_S1_SHORT || S1_LONG && blinker_fast) {
-                    ds_alarm_hours_incr();
-                    cfg_changed = 1;
-                }
-                break;
-
-            case K_ALARM_SET_MINUTE:
-                flash_01 = 0;
-                flash_23 = 1;
-                alarm_reset = 1;
-                if (ev == EV_S2_SHORT) {
-                    kmode = K_ALARM;
-                }
-                else if (ev == EV_S1_SHORT || (S1_LONG && blinker_fast)) {
-                    ds_alarm_minutes_incr();
-                    cfg_changed = 1;
-                }
-                break;
-#endif
-
             case K_NORMAL:
             default:
                 flash_01 = 0;
@@ -633,14 +369,8 @@ int main()
 
                 dmode = M_NORMAL;
 
-                if (ev == EV_S1_SHORT) {
-                    kmode = K_SEC_DISP;
-                }
-                else if (ev == EV_S2_LONG) {
+                if (ev == EV_S2_LONG) {
                     kmode = K_SET_HOUR;
-                }
-                else if (ev == EV_S2_SHORT) {
-                    kmode = K_TEMP_DISP;
                 }
 #ifdef stc15w408as
                 else if (ev == EV_S3_LONG) {
@@ -655,21 +385,10 @@ int main()
 
         switch (dmode) {
             case M_NORMAL:
-#ifndef WITHOUT_ALARM
-            case M_ALARM:
-#endif
             {
                 uint8_t hh = rtc_hh_bcd;
                 uint8_t mm = rtc_mm_bcd;
                 __bit pm = rtc_pm;
-
-#ifndef WITHOUT_ALARM
-                if (dmode == M_ALARM) {
-                    hh = alarm_hh_bcd;
-                    mm = alarm_mm_bcd;
-                    pm = alarm_pm;
-                }
-#endif
 
                 if (!flash_01 || blinker_fast || S1_LONG) {
                     uint8_t h0 = hh >> 4;
@@ -711,102 +430,8 @@ int main()
                 filldisplay(3, rtc_table[DS_ADDR_SECONDS] & DS_MASK_SECONDS_UNITS, 0);
                 dot3display(0);
                 break;
-
-#ifndef WITHOUT_DATE
-            case M_DATE_DISP:
-                if (!flash_01 || blinker_fast || S2_LONG) {
-                    if (!CONF_SW_MMDD) {
-                        filldisplay( 0, rtc_table[DS_ADDR_MONTH] >> 4, 0);// tenmonth ( &MASK_TENS useless, as MSB bits are read as '0')
-                        filldisplay( 1, rtc_table[DS_ADDR_MONTH] & DS_MASK_MONTH_UNITS, 0);
-                    }
-                    else {
-                        filldisplay( 2, rtc_table[DS_ADDR_MONTH] >> 4, 0);// tenmonth ( &MASK_TENS useless, as MSB bits are read as '0')
-                        filldisplay( 3, rtc_table[DS_ADDR_MONTH] & DS_MASK_MONTH_UNITS, 0);
-                    }
-                }
-
-                if (!flash_23 || blinker_fast || S2_LONG) {
-                    if (!CONF_SW_MMDD) {
-                        filldisplay( 2, rtc_table[DS_ADDR_DAY] >> 4, 0); // tenday   ( &MASK_TENS useless)
-                        filldisplay( 3, rtc_table[DS_ADDR_DAY] & DS_MASK_DAY_UNITS, 0);     // day
-                    }
-                    else {
-                        filldisplay( 0, rtc_table[DS_ADDR_DAY] >> 4, 0); // tenday   ( &MASK_TENS useless)
-                        filldisplay( 1, rtc_table[DS_ADDR_DAY] & DS_MASK_DAY_UNITS, 0);     // day
-                    }
-                }
-                dotdisplay(1, 1);
-                dot3display(0);
-                break;
-#endif
-
-            case M_WEEKDAY_DISP:
-                filldisplay( 1, LED_DASH, 0);
-                filldisplay( 2, rtc_table[DS_ADDR_WEEKDAY], 0); //weekday ( &MASK_UNITS useless, all MSBs are '0')
-                filldisplay( 3, LED_DASH, 0);
-                dot3display(0);
-                break;
-
-            case M_TEMP_DISP:
-                filldisplay( 0, ds_int2bcd_tens(temp), 0);
-                filldisplay( 1, ds_int2bcd_ones(temp), 0);
-                filldisplay( 2, CONF_C_F ? LED_f : LED_c, 1);
-                // if (temp<0) filldisplay( 3, LED_DASH, 0);  -- temp defined as uint16, cannot be <0
-                dot3display(0);
-                break;
-
-#ifdef DEBUG
-            case M_DEBUG:
-            {
-                // seconds, loop counter, blinkers, S1/S2, keypress events
-                uint8_t cc = count;
-                if (S1_PRESSED || S2_PRESSED) {
-                    filldisplay( 0, S1_PRESSED || S2_PRESSED ? LED_DASH : LED_BLANK, ev == EV_S1_SHORT || ev == EV_S2_SHORT);
-                    filldisplay( 1, S1_LONG || S2_LONG ? LED_DASH : LED_BLANK, ev == EV_S1_LONG || ev == EV_S2_LONG);
-                } else {
-                    filldisplay(0, (rtc_table[DS_ADDR_SECONDS] >> 4) & (DS_MASK_SECONDS_TENS >> 4), 0);
-                    filldisplay(1, rtc_table[DS_ADDR_SECONDS] & DS_MASK_SECONDS_UNITS, blinker_slow );
-                }
-                filldisplay(2, cc >> 4 & 0x0F, ev != EV_NONE);
-                filldisplay(3, cc & 0x0F, blinker_slow & blinker_fast);
-                break;
-            }
-            case M_DEBUG2:
-            {
-                // photoresistor adc and lightval
-                uint8_t adc = getADCResult8(ADC_LIGHT);
-                uint8_t lv = lightval;
-                filldisplay( 0, adc >> 4, 0);
-                filldisplay( 1, adc & 0x0F, 0);
-                filldisplay( 2, lv >> 4, 1);
-                filldisplay( 3, lv & 0x0F, 0);
-                break;
-            }
-            case M_DEBUG3:
-            {
-                // thermistor adc
-                uint16_t rt = getADCResult(ADC_TEMP);
-                filldisplay( 0, rt >> 12, 0);
-                filldisplay( 1, rt >> 8 & 0x0F, 0);
-                filldisplay( 2, rt >> 4 & 0x0F, 0);
-                filldisplay( 3, rt & 0x0F, 0);
-                break;
-            }
-#endif
         }
 
-#ifndef WITHOUT_ALARM
-        if (alarm_trigger && !alarm_reset) {
-            if (blinker_slow && blinker_fast) {
-                clearTmpDisplay();
-                BUZZER_ON;
-            } else {
-                BUZZER_OFF;
-            }
-        } else {
-            BUZZER_OFF;
-        }
-#endif
 
         __critical {
             updateTmpDisplay();
@@ -816,4 +441,3 @@ int main()
         WDT_CLEAR();
     }
 }
-/* ------------------------------------------------------------------------- */
